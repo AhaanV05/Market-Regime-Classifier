@@ -7,9 +7,6 @@
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen.svg)]()
 [![Project](https://img.shields.io/badge/Project-Complete-success.svg)]()
 
-> **Project Status: ✅ PRODUCTION READY**  
-> Complete ML regime detection system with full automation, web dashboard, and comprehensive documentation.
-
 ## Overview
 
 This project implements a sophisticated regime detection system for Indian equity markets using a **2×3 Hierarchical HMM**:
