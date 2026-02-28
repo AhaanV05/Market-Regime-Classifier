@@ -181,23 +181,20 @@ ML Regime Classifier/
 ├── tests/
 │   └── test_features.py          # Feature validation tests
 │
-├── docs/
-│   ├── FEATURES.md               # Feature documentation
-│   └── [MODEL_SPECIFICATION.md]  # HMM architecture
-│
-├── PROJECT_PLAN.md               # Project documentation
-├── regime_system_spec.md         # System specification
+├── GITHUB_ACTIONS_SETUP.md       # GitHub Actions setup guide
+├── QUICKSTART.md                 # Quick start guide
+├── LICENSE                       # MIT License
 ├── requirements.txt              # Python dependencies
 └── README.md                     # This file
 ```
 
-## Feature Documentation
+## Feature Overview
 
-See [docs/FEATURES.md](docs/FEATURES.md) for comprehensive documentation of all 37 features, including:
-- Mathematical formulas
-- Window sizes
-- Regime interpretation
-- Normalization strategy
+The system uses 37 engineered features (17 SLOW + 20 FAST) for regime detection:
+- **SLOW features**: 6-12 month windows for structural regime detection
+- **FAST features**: 1 day to 3 month windows for short-term dynamics
+- **Normalization**: Rolling z-scores (252D SLOW, 60D FAST)
+- **Outlier handling**: ±5σ clipping for numerical stability
 
 ### Example Features
 
@@ -273,8 +270,9 @@ See [docs/FEATURES.md](docs/FEATURES.md) for comprehensive documentation of all 
 **🎉 PRODUCTION READY** - Complete system with full automation!
 
 **Documentation**:
-- **Setup**: [QUICKSTART.md](QUICKSTART.md) | [GitHub Actions Setup](GITHUB_ACTIONS_SETUP.md)
-- **Technical**: See [docs/](docs/) folder for detailed specifications
+- **Setup Guide**: [QUICKSTART.md](QUICKSTART.md)
+- **GitHub Actions**: [GITHUB_ACTIONS_SETUP.md](GITHUB_ACTIONS_SETUP.md)
+- **License**: [MIT](LICENSE)
 
 ## Performance
 
@@ -290,10 +288,17 @@ See [docs/FEATURES.md](docs/FEATURES.md) for comprehensive documentation of all 
 
 ## Contributing
 
-This is a research project. For questions or collaboration:
-1. Review [PROJECT_PLAN.md](PROJECT_PLAN.md) for scope
-2. Check [docs/FEATURES.md](docs/FEATURES.md) for feature details
-3. Run tests before submitting changes
+Contributions are welcome! To contribute:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/your-feature`)
+3. Make your changes and test thoroughly
+4. Run the test suite: `python tests/test_features.py`
+5. Commit your changes (`git commit -m "Add your feature"`)
+6. Push to your branch (`git push origin feature/your-feature`)
+7. Open a Pull Request
+
+For questions or collaboration, please open an issue on GitHub.
 
 ## License
 
