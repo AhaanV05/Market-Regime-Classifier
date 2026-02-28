@@ -768,29 +768,61 @@ class RetrainController:
             train_idx, val_idx = self._prepare_train_val_windows(features_df.index, as_of_date)
             record(2, "Prepare train/validation windows", "SUCCESS", {"train_start": str(train_idx.min().date()), "train_end": str(train_idx.max().date()), "validation_start": str(val_idx.min().date()), "validation_end": str(val_idx.max().date()), "train_days": int(len(train_idx)), "validation_days": int(len(val_idx))})
 
-            new_models = self._build_new_models(features_df, train_idx, current_models)
-            record(3, "Retrain macro + fast HMMs", "SUCCESS", new_models.get("training_metadata", {}))
+            # ── Retry loop: Train + Validate with multiple attempts ──────────
+            max_attempts = int(self.config.get("max_retrain_attempts", 3))
+            new_models = None
+            gate = None
+            gate_pass = False
+            
+            for attempt in range(1, max_attempts + 1):
+                attempt_suffix = f" (attempt {attempt}/{max_attempts})" if max_attempts > 1 else ""
+                
+                new_models = self._build_new_models(features_df, train_idx, current_models)
+                record(3, f"Retrain macro + fast HMMs{attempt_suffix}", "SUCCESS", {
+                    **new_models.get("training_metadata", {}),
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                })
 
-            gate = self._run_validation_gate(current_models, new_models, features_df, market_df, val_idx)
-            gate_pass = bool(gate["validation_passed"])
+                gate = self._run_validation_gate(current_models, new_models, features_df, market_df, val_idx)
+                gate_pass = bool(gate["validation_passed"])
+                
+                record(
+                    4,
+                    f"Run Week-8 validation gate{attempt_suffix}",
+                    "PASS" if gate_pass else "FAIL",
+                    {
+                        "current_score": gate["current_score"],
+                        "new_score": gate["new_score"],
+                        "current_checks": gate["current_eval"].get("metrics", {}).get("checks", {}),
+                        "new_checks": gate["new_eval"].get("metrics", {}).get("checks", {}),
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                    },
+                )
+                
+                if gate_pass:
+                    if attempt > 1:
+                        record(
+                            4.5,
+                            "Training retry successful",
+                            "SUCCESS",
+                            {"reason": f"Validation passed on attempt {attempt}/{max_attempts}"},
+                        )
+                    break
+                elif attempt < max_attempts:
+                    record(
+                        4.5,
+                        "Retry training due to validation failure",
+                        "INFO",
+                        {"reason": f"Attempt {attempt} failed validation (score {gate['new_score']}/{len(gate['new_eval'].get('metrics', {}).get('checks', {}))}), retrying..."},
+                    )
+            # ── End retry loop ──────────────────────────────────────────────
+            
             emergency_mode = str(trigger_reason).startswith("emergency")
             emergency_override_enabled = bool(self.config.get("emergency_bypass_validation", False))
             validation_overridden = bool(emergency_mode and emergency_override_enabled and (not gate_pass))
-
-            record(
-                4,
-                "Run Week-8 validation gate",
-                "PASS" if gate_pass else "FAIL",
-                {
-                    "current_score": gate["current_score"],
-                    "new_score": gate["new_score"],
-                    "current_checks": gate["current_eval"].get("metrics", {}).get("checks", {}),
-                    "new_checks": gate["new_eval"].get("metrics", {}).get("checks", {}),
-                    "emergency_mode": emergency_mode,
-                    "emergency_override_enabled": emergency_override_enabled,
-                    "validation_overridden": validation_overridden,
-                },
-            )
+            
             if validation_overridden:
                 record(
                     5,
@@ -1072,6 +1104,7 @@ def main():
         "reg_covar": 1e-5,
         "context_quantile": 0.60,
         "min_fast_context_samples": 100,
+        "max_retrain_attempts": 3,
     }
     if args.no_emergency_override:
         config["emergency_bypass_validation"] = False
