@@ -1,0 +1,72 @@
+# GitHub Actions Workflow Template for Daily Regime Classifier
+# 
+# ⚠️ CONFIGURATION REQUIRED:
+# 1. Replace <YOUR_WORKSPACE_PATH> with your actual workspace path
+#    (e.g., "C:\\Users\\YourName\\Projects\\ml-regime-classifier")
+# 2. Set up a self-hosted runner (see GITHUB_ACTIONS_SETUP.md)
+# 3. Adjust cron schedule if needed (default: 2 AM UTC daily)
+#
+# This workflow runs on YOUR local machine (self-hosted runner),
+# not on GitHub's cloud servers.
+
+name: Daily Regime Classifier Update
+
+on:
+  schedule:
+    # Runs at 2 AM UTC every day
+    # Adjust timezone offset as needed: https://crontab.guru/#0_2_*_*_*
+    - cron: '0 2 * * *'
+  
+  # Allow manual triggering from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  update-regime:
+    runs-on: self-hosted
+    
+    steps:
+      - name: Check environment
+        shell: pwsh
+        run: |
+          Write-Host "=== Environment Check ===" -ForegroundColor Cyan
+          Write-Host "Time: $(Get-Date)" -ForegroundColor White
+          Write-Host "Path: $PWD" -ForegroundColor White
+          Write-Host "Python: $(python --version)" -ForegroundColor White
+          
+      - name: Run daily automation pipeline
+        shell: pwsh
+        run: |
+          # TODO: Replace with your workspace path
+          Set-Location "<YOUR_WORKSPACE_PATH>"
+          & ".\venv\Scripts\Activate.ps1"
+          Write-Host "`n=== Starting Daily Pipeline ===" -ForegroundColor Cyan
+          python scripts/daily_automation.py --build-features
+          
+      - name: Report pipeline status
+        if: always()
+        shell: pwsh
+        run: |
+          # TODO: Replace with your workspace path
+          Set-Location "<YOUR_WORKSPACE_PATH>"
+          
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "`n✓ Pipeline completed successfully" -ForegroundColor Green
+            
+            # Read latest stats
+            if (Test-Path "features\regime_timeline_history.csv") {
+              $timeline = Get-Content "features\regime_timeline_history.csv" | Measure-Object -Line
+              Write-Host "`nStats:" -ForegroundColor Cyan
+              Write-Host "  Timeline rows: $($timeline.Lines - 1)" -ForegroundColor White
+            }
+            
+            if (Test-Path "logs\daily_automation_runs.jsonl") {
+              $latestRun = Get-Content "logs\daily_automation_runs.jsonl" -Tail 1 | ConvertFrom-Json
+              Write-Host "  Last run: $($latestRun.timestamp)" -ForegroundColor White
+            }
+            
+          } else {
+            Write-Host "`n✗ Pipeline failed with exit code $LASTEXITCODE" -ForegroundColor Red
+            Write-Host "Check logs in your workspace logs/ folder" -ForegroundColor Yellow
+            exit $LASTEXITCODE
+          }
+
