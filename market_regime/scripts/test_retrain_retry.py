@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Simulate reading from the most recent retrain log
 BASE_DIR = Path(__file__).parent.parent
-LOGS_DIR = BASE_DIR / "logs"
+LOGS_DIR = BASE_DIR.parent / "logs" / "market_regime"
 
 # Read the most recent retrain report (the one from 3:58 AM drift retrain)
 log_file = LOGS_DIR / "retrain_report_20260227_drift_features_rejected.json"

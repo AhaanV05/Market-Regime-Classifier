@@ -1,4 +1,4 @@
-﻿"""
+"""
 Outlier Detection for Market Data
 Identifies anomalous returns, volume spikes, and data quality issues
 """
@@ -219,7 +219,7 @@ def generate_outlier_report(
             flagged = return_outliers[return_outliers['is_outlier']]
             flagged.to_csv(output_path.replace('.csv', '_returns.csv'), index=False)
         
-        print(f"\nâœ“ Report saved to {output_path}")
+        print(f"\n✓ Report saved to {output_path}")
     
     return report
 

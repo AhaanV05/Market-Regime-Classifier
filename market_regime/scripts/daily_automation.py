@@ -17,8 +17,9 @@ from datetime import datetime
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-LOGS_DIR = PROJECT_ROOT / "logs"
+MARKET_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = MARKET_DIR.parent
+LOGS_DIR = PROJECT_ROOT / "logs" / "market_regime"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -46,12 +47,12 @@ def main():
 
     commands = []
     if args.build_features:
-        commands.append([py, str(PROJECT_ROOT / "scripts" / "build_features.py")])
+        commands.append([py, str(MARKET_DIR / "scripts" / "build_features.py")])
     commands.extend(
         [
-            [py, str(PROJECT_ROOT / "scripts" / "daily_inference.py")],
-            [py, str(PROJECT_ROOT / "scripts" / "daily_ops.py")],
-            [py, str(PROJECT_ROOT / "scripts" / "run_retrain_if_triggered.py")],
+            [py, str(MARKET_DIR / "scripts" / "daily_inference.py")],
+            [py, str(MARKET_DIR / "scripts" / "daily_ops.py")],
+            [py, str(MARKET_DIR / "scripts" / "run_retrain_if_triggered.py")],
         ]
     )
     if args.date:

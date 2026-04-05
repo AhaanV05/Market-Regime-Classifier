@@ -1,4 +1,4 @@
-﻿"""
+"""
 NSE Trading Calendar for ML Regime Classifier
 Fetches holidays dynamically from NSE API (2011+) with 2010 fallback
 """
@@ -310,5 +310,5 @@ if __name__ == "__main__":
     print(f"  Expected: ~20-21 (excluding weekends and holidays)")
     
     print("\n" + "="*60)
-    print("âœ“ Calendar test complete")
+    print("✓ Calendar test complete")
     print("="*60)

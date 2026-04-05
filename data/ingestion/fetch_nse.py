@@ -1,4 +1,4 @@
-﻿"""
+"""
 NSE Data Fetcher for ML Regime Classifier
 Fetches NIFTY 50, India VIX, and related market data from Yahoo Finance
 Targets: 15+ years of historical data
@@ -32,8 +32,8 @@ def fetch_nifty_data(
     """
     print(f"Fetching NIFTY 50 data from {start_date} to {end_date}...")
     
-    # Yahoo Finance ticker for NIFTY 50
-    ticker = "^NSEI"
+    # Yahoo Finance ticker for NIFTY 500 (CRSLDX tracks Nifty 500 effectively on YF)
+    ticker = "^CRSLDX"
     
     # Download data
     df = yf.download(ticker, start=start_date, end=end_date, progress=False)

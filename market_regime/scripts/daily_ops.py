@@ -41,11 +41,12 @@ def resolve_base_dir() -> Path:
 
 
 BASE_DIR = resolve_base_dir()
+ROOT_DIR = BASE_DIR.parent
 DATA_DIR = BASE_DIR / "data" / "processed"
 FEATURES_DIR = BASE_DIR / "features"
 MODELS_DIR = BASE_DIR / "models"
-OUTPUT_DIR = BASE_DIR / "output"
-LOGS_DIR = BASE_DIR / "logs"
+OUTPUT_DIR = ROOT_DIR / "output" / "market_regime"
+LOGS_DIR = ROOT_DIR / "logs" / "market_regime"
 
 for p in [OUTPUT_DIR, LOGS_DIR]:
     p.mkdir(parents=True, exist_ok=True)

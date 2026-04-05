@@ -125,6 +125,12 @@ class DailyInferencePipeline:
                 'cooldown': 0,
                 'last_eval_date': None,
             },
+            'saturation': {
+                'macro_high_count': 0,
+                'macro_low_count': 0,
+                'fast_high_state': None,
+                'fast_high_count': 0,
+            },
             'recent_states': [],
             'last_processed_date': None,
         }
@@ -246,6 +252,8 @@ class DailyInferencePipeline:
                 for layer in ['macro', 'fast', 'macro_adaptive', 'fast_adaptive']:
                     if layer in state:
                         self.runtime_state[layer].update(state[layer])
+                if 'saturation' in state and isinstance(state['saturation'], dict):
+                    self.runtime_state['saturation'].update(state['saturation'])
                 if 'recent_states' in state and isinstance(state['recent_states'], list):
                     self.runtime_state['recent_states'] = state['recent_states'][-self.state_history_window:]
                 self.runtime_state['last_processed_date'] = state.get('last_processed_date')
@@ -309,6 +317,7 @@ class DailyInferencePipeline:
             'ema_adaptive': self.runtime_state.get('ema_adaptive', {}),
             'macro_adaptive': self.runtime_state.get('macro_adaptive', {}),
             'fast_adaptive': self.runtime_state.get('fast_adaptive', {}),
+            'saturation': self.runtime_state.get('saturation', {}),
             'recent_states': self.runtime_state['recent_states'][-self.state_history_window:],
             'last_processed_date': self.runtime_state.get('last_processed_date'),
             'updated_at': datetime.now().isoformat(),
@@ -456,6 +465,216 @@ class DailyInferencePipeline:
             probs /= total
         return probs
 
+    def _apply_prob_floor(self, probs):
+        """Apply mandatory floor/ceiling then renormalize."""
+        floor = float(self.config.get('prob_floor_eps', 0.02))
+        ceiling = float(self.config.get('prob_ceiling', 0.98))
+        floor = min(max(floor, 0.0), 0.49)
+        ceiling = min(max(ceiling, 0.51), 1.0)
+
+        arr = np.array(probs, dtype=float)
+        arr = np.clip(arr, floor, ceiling)
+        total = float(arr.sum())
+        if total <= 0.0:
+            arr[:] = 1.0 / len(arr)
+        else:
+            arr /= total
+        return arr
+
+    def _calibrate_macro_hysteresis(self):
+        """Calibrate macro thresholds from recent raw macro probabilities with structural bias checks."""
+        enter = float(self.config.get('hysteresis_enter', 0.60))
+        exit_ = float(self.config.get('hysteresis_exit', 0.40))
+        details = {'used_dynamic': False, 'enter': enter, 'exit': exit_, 'structural_bias_correction': False}
+
+        if not bool(self.config.get('macro_threshold_recalibration_enabled', True)):
+            return enter, exit_, details
+        if not self.timeline_file.exists():
+            return enter, exit_, details
+
+        try:
+            cols = ['Date', 'p_fragile_raw', 'p_fragile', 'adaptive_macro_state']
+            full_hist = pd.read_csv(self.timeline_file, usecols=lambda c: c in cols)
+            prob_col = 'p_fragile_raw' if 'p_fragile_raw' in full_hist.columns else ('p_fragile' if 'p_fragile' in full_hist.columns else None)
+            if prob_col is None or len(full_hist) < 40:
+                return enter, exit_, details
+                
+            # Structural Bias Check Over Multiple Windows (126d, 252d, full-sample)
+            structural_skew = False
+            if 'adaptive_macro_state' in full_hist.columns and len(full_hist) >= 252:
+                has_bias_126 = (full_hist['adaptive_macro_state'].tail(126).value_counts(normalize=True).get("Fragile", 0)) > 0.60
+                has_bias_252 = (full_hist['adaptive_macro_state'].tail(252).value_counts(normalize=True).get("Fragile", 0)) > 0.60
+                has_bias_full = (full_hist['adaptive_macro_state'].value_counts(normalize=True).get("Fragile", 0)) > 0.60
+                
+                # If all windows show structural over-classification to Fragile
+                if has_bias_126 and has_bias_252 and has_bias_full:
+                    structural_skew = True
+
+            lookback = int(self.config.get('macro_threshold_recalibration_lookback_days', 756))
+            hist = full_hist.copy()
+            if 'Date' in hist.columns:
+                hist['Date'] = pd.to_datetime(hist['Date'], errors='coerce')
+                hist = hist.dropna(subset=['Date'])
+                if len(hist) > lookback:
+                    hist = hist.tail(lookback)
+            elif len(hist) > lookback:
+                hist = hist.tail(lookback)
+
+            x = pd.to_numeric(hist[prob_col], errors='coerce').dropna()
+            if len(x) < 40:
+                return enter, exit_, details
+
+            q_hi = float(self.config.get('macro_threshold_recalibration_high_quantile', 0.70))
+            q_lo = float(self.config.get('macro_threshold_recalibration_low_quantile', 0.30))
+            
+            # Recalibrate definitions directly if we are structurally biased
+            if structural_skew:
+                q_hi = min(0.85, q_hi + 0.10) # Make it harder to enter Fragile
+                q_lo = min(0.50, q_lo + 0.05) # Make it easier to exit Fragile
+
+            dyn_enter = float(x.quantile(q_hi))
+            dyn_exit = float(x.quantile(q_lo))
+
+            enter_min = float(self.config.get('macro_threshold_enter_min', 0.55))
+            enter_max = float(self.config.get('macro_threshold_enter_max', 0.80))
+            exit_min = float(self.config.get('macro_threshold_exit_min', 0.20))
+            exit_max = float(self.config.get('macro_threshold_exit_max', 0.45))
+            
+            if structural_skew:
+                enter_min += 0.05
+                enter_max += 0.05
+
+            min_gap = float(self.config.get('macro_threshold_min_gap', 0.12))
+
+            enter = float(np.clip(dyn_enter, enter_min, enter_max))
+            exit_ = float(np.clip(dyn_exit, exit_min, exit_max))
+            if enter - exit_ < min_gap:
+                exit_ = max(exit_min, min(exit_max, enter - min_gap))
+
+            details = {
+                'used_dynamic': True,
+                'prob_col': prob_col,
+                'samples': int(len(x)),
+                'enter': enter,
+                'exit': exit_,
+                'structural_bias_correction': structural_skew
+            }
+            return enter, exit_, details
+        except Exception:
+            return float(self.config.get('hysteresis_enter', 0.60)), float(self.config.get('hysteresis_exit', 0.40)), details
+
+    def _apply_adaptive_saturation_guardrails(self, probabilities, asof_date):
+        """Cap prolonged saturation and recenter adaptive EMA when stuck near extremes."""
+        sat = self.runtime_state['saturation']
+        ema_a = self.runtime_state['ema_adaptive']
+
+        hi = float(self.config.get('adaptive_saturation_high', 0.98))
+        lo = float(self.config.get('adaptive_saturation_low', 0.02))
+        max_days = int(self.config.get('adaptive_saturation_max_days', 40))
+        recenter = float(self.config.get('adaptive_saturation_recenter_strength', 0.25))
+        recenter = min(max(recenter, 0.0), 1.0)
+
+        if float(ema_a['p_fragile_adaptive']) >= hi:
+            sat['macro_high_count'] = int(sat.get('macro_high_count', 0)) + 1
+            sat['macro_low_count'] = 0
+        elif float(ema_a['p_fragile_adaptive']) <= lo:
+            sat['macro_low_count'] = int(sat.get('macro_low_count', 0)) + 1
+            sat['macro_high_count'] = 0
+        else:
+            sat['macro_high_count'] = 0
+            sat['macro_low_count'] = 0
+
+        recentered = {
+            'macro_recentering_applied': False,
+            'fast_recentering_applied': False,
+            'asof_date': pd.Timestamp(asof_date).strftime('%Y-%m-%d'),
+        }
+        if int(sat.get('macro_high_count', 0)) >= max_days or int(sat.get('macro_low_count', 0)) >= max_days:
+            p_old = float(ema_a['p_fragile_adaptive'])
+            p_new = (1.0 - recenter) * p_old + recenter * 0.5
+            p_new = float(np.clip(p_new, 0.0, 1.0))
+            ema_a['p_fragile_adaptive'] = p_new
+            sat['macro_high_count'] = 0
+            sat['macro_low_count'] = 0
+            recentered['macro_recentering_applied'] = True
+            recentered['macro_p_fragile_before'] = p_old
+            recentered['macro_p_fragile_after'] = p_new
+
+        fast_vec = np.array([
+            float(ema_a['p_calm_adaptive']),
+            float(ema_a['p_choppy_adaptive']),
+            float(ema_a['p_stress_adaptive']),
+        ], dtype=float)
+        dominant_idx = int(np.argmax(fast_vec))
+        dominant_state = ['Calm', 'Choppy', 'Stress'][dominant_idx]
+        if float(fast_vec[dominant_idx]) >= hi:
+            if sat.get('fast_high_state') == dominant_state:
+                sat['fast_high_count'] = int(sat.get('fast_high_count', 0)) + 1
+            else:
+                sat['fast_high_state'] = dominant_state
+                sat['fast_high_count'] = 1
+        else:
+            sat['fast_high_state'] = None
+            sat['fast_high_count'] = 0
+
+        if int(sat.get('fast_high_count', 0)) >= max_days:
+            fast_old = fast_vec.copy()
+            fast_new = (1.0 - recenter) * fast_old + recenter * np.array([1 / 3, 1 / 3, 1 / 3], dtype=float)
+            fast_new = self._apply_prob_floor(fast_new)
+            ema_a['p_calm_adaptive'] = float(fast_new[0])
+            ema_a['p_choppy_adaptive'] = float(fast_new[1])
+            ema_a['p_stress_adaptive'] = float(fast_new[2])
+            sat['fast_high_state'] = None
+            sat['fast_high_count'] = 0
+            recentered['fast_recentering_applied'] = True
+            recentered['fast_before'] = [float(x) for x in fast_old.tolist()]
+            recentered['fast_after'] = [float(x) for x in fast_new.tolist()]
+
+        probabilities['p_fragile'] = float(np.clip(probabilities['p_fragile'], 0.0, 1.0))
+        probabilities['p_durable'] = float(1.0 - probabilities['p_fragile'])
+        return recentered
+
+    def _compute_yearly_occupancy_alarm(self, asof_date, macro_col='adaptive_macro_state'):
+        """Raise warning when yearly Durable/Fragile occupancy breaches configured cap."""
+        if not bool(self.config.get('yearly_occupancy_alarm_enabled', True)):
+            return None
+        if not self.timeline_file.exists():
+            return None
+
+        limit = float(self.config.get('yearly_occupancy_limit', 0.90))
+        try:
+            hist = pd.read_csv(self.timeline_file, usecols=['Date', macro_col])
+            if macro_col not in hist.columns or len(hist) == 0:
+                return None
+            hist['Date'] = pd.to_datetime(hist['Date'], errors='coerce')
+            hist = hist.dropna(subset=['Date', macro_col])
+            if len(hist) == 0:
+                return None
+
+            year = int(pd.Timestamp(asof_date).year)
+            curr = hist[hist['Date'].dt.year == year]
+            if len(curr) < int(self.config.get('yearly_occupancy_min_samples', 40)):
+                return None
+
+            occ = curr[macro_col].astype(str).value_counts(normalize=True)
+            durable = float(occ.get('Durable', 0.0))
+            fragile = float(occ.get('Fragile', 0.0))
+            max_occ = max(durable, fragile)
+            if max_occ <= limit:
+                return None
+
+            dominant = 'Fragile' if fragile >= durable else 'Durable'
+            return {
+                'year': year,
+                'dominant_state': dominant,
+                'durable_occupancy': durable,
+                'fragile_occupancy': fragile,
+                'max_occupancy': max_occ,
+                'limit': limit,
+            }
+        except Exception:
+            return None
+
     def _resolve_asof_date(self, run_date):
         run_ts = pd.Timestamp(run_date).normalize()
         available = self.market_data.index[self.market_data.index <= run_ts]
@@ -497,6 +716,7 @@ class DailyInferencePipeline:
 
         slow_post = self.slow_model.predict_proba(X_slow)[0]
         macro_probs = self._label_probs(slow_post, self.slow_map, ['Durable', 'Fragile'])
+        macro_probs = self._apply_prob_floor(macro_probs)
         p_durable, p_fragile = float(macro_probs[0]), float(macro_probs[1])
 
         fast_post_durable = self.fast_durable_model.predict_proba(X_fast)[0]
@@ -504,10 +724,14 @@ class DailyInferencePipeline:
 
         probs_durable_ctx = self._label_probs(fast_post_durable, self.fast_durable_map, ['Calm', 'Choppy', 'Stress'])
         probs_fragile_ctx = self._label_probs(fast_post_fragile, self.fast_fragile_map, ['Calm', 'Choppy', 'Stress'])
+        probs_durable_ctx = self._apply_prob_floor(probs_durable_ctx)
+        probs_fragile_ctx = self._apply_prob_floor(probs_fragile_ctx)
 
         p_calm = p_durable * probs_durable_ctx[0] + p_fragile * probs_fragile_ctx[0]
         p_choppy = p_durable * probs_durable_ctx[1] + p_fragile * probs_fragile_ctx[1]
         p_stress = p_durable * probs_durable_ctx[2] + p_fragile * probs_fragile_ctx[2]
+        fast_probs = self._apply_prob_floor([p_calm, p_choppy, p_stress])
+        p_calm, p_choppy, p_stress = float(fast_probs[0]), float(fast_probs[1]), float(fast_probs[2])
 
         macro_raw = 'Durable' if p_durable >= p_fragile else 'Fragile'
         fast_raw = ['Calm', 'Choppy', 'Stress'][int(np.argmax([p_calm, p_choppy, p_stress]))]
@@ -576,6 +800,7 @@ class DailyInferencePipeline:
 
         alpha_slow = float(self.config.get('ema_alpha_slow', 0.05))
         alpha_fast = float(self.config.get('ema_alpha_fast', 0.10))
+        enter, exit_, threshold_meta = self._calibrate_macro_hysteresis()
 
         ema = self.runtime_state['ema_state']
         ema['p_fragile_smooth'] = alpha_slow * probabilities['p_fragile'] + (1 - alpha_slow) * ema['p_fragile_smooth']
@@ -583,9 +808,13 @@ class DailyInferencePipeline:
         ema['p_choppy_smooth'] = alpha_fast * probabilities['p_choppy'] + (1 - alpha_fast) * ema['p_choppy_smooth']
         ema['p_stress_smooth'] = alpha_fast * probabilities['p_stress'] + (1 - alpha_fast) * ema['p_stress_smooth']
 
+        smooth_fast = self._apply_prob_floor([ema['p_calm_smooth'], ema['p_choppy_smooth'], ema['p_stress_smooth']])
+        ema['p_calm_smooth'] = float(smooth_fast[0])
+        ema['p_choppy_smooth'] = float(smooth_fast[1])
+        ema['p_stress_smooth'] = float(smooth_fast[2])
+        ema['p_fragile_smooth'] = float(np.clip(ema['p_fragile_smooth'], 0.0, 1.0))
+
         # ── Macro hysteresis (NB02: apply_hysteresis_macro) ──
-        enter = float(self.config.get('hysteresis_enter', 0.60))
-        exit_ = float(self.config.get('hysteresis_exit', 0.40))
         prev_macro = self.runtime_state['macro']['stable'] or 'Durable'
         if ema['p_fragile_smooth'] >= enter:
             macro_candidate = 'Fragile'
@@ -673,6 +902,14 @@ class DailyInferencePipeline:
             a_fast_adaptive = alpha_fast + (alpha_max_fast - alpha_fast) * div ** gamma
             ema_a[ema_key] = a_fast_adaptive * probabilities[prob_key] + (1 - a_fast_adaptive) * ema_a[ema_key]
 
+        adaptive_fast = self._apply_prob_floor([ema_a['p_calm_adaptive'], ema_a['p_choppy_adaptive'], ema_a['p_stress_adaptive']])
+        ema_a['p_calm_adaptive'] = float(adaptive_fast[0])
+        ema_a['p_choppy_adaptive'] = float(adaptive_fast[1])
+        ema_a['p_stress_adaptive'] = float(adaptive_fast[2])
+        ema_a['p_fragile_adaptive'] = float(np.clip(ema_a['p_fragile_adaptive'], 0.0, 1.0))
+
+        saturation_meta = self._apply_adaptive_saturation_guardrails(probabilities, asof_date)
+
         # Adaptive macro hysteresis (same thresholds, faster-tracking EMA)
         prev_macro_a = self.runtime_state['macro_adaptive']['stable'] or 'Durable'
         if ema_a['p_fragile_adaptive'] >= enter:
@@ -736,6 +973,8 @@ class DailyInferencePipeline:
             'adaptive_macro_state': adaptive_macro_state,
             'adaptive_fast_state': adaptive_fast_state,
             'adaptive_ema': ema_a.copy(),
+            'macro_thresholds': threshold_meta,
+            'saturation': saturation_meta,
         }
 
         print(f'  Stable state: {macro_state}–{fast_state}  (adaptive: {adaptive_macro_state}–{adaptive_fast_state})')
@@ -770,7 +1009,7 @@ class DailyInferencePipeline:
 
         return {'slow': top_slow, 'fast': top_fast}
 
-    def _build_alert(self, macro_state, fast_state, guardrail_meta):
+    def _build_alert(self, macro_state, fast_state, guardrail_meta, occupancy_alarm=None):
         prev_combined = None
         if self.runtime_state['recent_states']:
             prev_combined = self.runtime_state['recent_states'][-1].get('combined_state')
@@ -787,6 +1026,15 @@ class DailyInferencePipeline:
             if prev_combined and prev_combined != curr_combined:
                 return True, 'INFO', f'INFO REGIME CHANGE: {prev_combined} -> {curr_combined}'
             return True, 'INFO', f'INFO REGIME CHANGE: now {curr_combined}'
+
+        if occupancy_alarm:
+            msg = (
+                f'WARNING OCCUPANCY: {occupancy_alarm["year"]} '
+                f'{occupancy_alarm["dominant_state"]} occupancy '
+                f'{occupancy_alarm["max_occupancy"]:.1%} exceeds '
+                f'limit {occupancy_alarm["limit"]:.1%}'
+            )
+            return True, 'WARNING', msg
 
         return False, None, None
 
@@ -887,7 +1135,9 @@ class DailyInferencePipeline:
         self.runtime_state['last_processed_date'] = pd.Timestamp(asof_date).strftime('%Y-%m-%d')
         self._save_runtime_state()
 
-        return None, self.timeline_file  # No longer saving individual daily JSON files
+        occupancy_alarm = self._compute_yearly_occupancy_alarm(asof_date=asof_date)
+
+        return None, self.timeline_file, occupancy_alarm  # No longer saving individual daily JSON files
 
     def run(self, run_date):
         stage_times = {}
@@ -936,7 +1186,7 @@ class DailyInferencePipeline:
             stage_times['attribution_seconds'] = time.time() - t
 
             t = time.time()
-            daily_file, timeline_file = self.save_outputs(
+            daily_file, timeline_file, occupancy_alarm = self.save_outputs(
                 run_date=run_ts,
                 asof_date=asof_date,
                 feat_date=feat_date,
@@ -950,7 +1200,12 @@ class DailyInferencePipeline:
             stage_times['save_seconds'] = time.time() - t
 
             t = time.time()
-            changed, severity, alert_message = self._build_alert(macro_state, fast_state, guardrail_meta)
+            changed, severity, alert_message = self._build_alert(
+                macro_state,
+                fast_state,
+                guardrail_meta,
+                occupancy_alarm=occupancy_alarm,
+            )
             stage_times['alert_seconds'] = time.time() - t
 
             elapsed = time.time() - total_start
@@ -966,6 +1221,7 @@ class DailyInferencePipeline:
                 'regime_changed': changed,
                 'alert_severity': severity,
                 'alert_message': alert_message,
+                'occupancy_alarm': occupancy_alarm,
                 'stage_times': stage_times,
                 'elapsed_seconds': elapsed,
                 'status': 'SUCCESS',

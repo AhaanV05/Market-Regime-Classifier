@@ -22,9 +22,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = PROJECT_ROOT / "output"
-LOGS_DIR = PROJECT_ROOT / "logs"
+MARKET_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = MARKET_DIR.parent
+OUTPUT_DIR = PROJECT_ROOT / "output" / "market_regime"
+LOGS_DIR = PROJECT_ROOT / "logs" / "market_regime"
 COOLDOWN_FILE = LOGS_DIR / "retrain_cooldown.json"
 
 # Triggers that bypass the cooldown entirely (market emergencies)
@@ -140,7 +141,7 @@ def main():
 
     cmd = [
         sys.executable,
-        str(PROJECT_ROOT / "scripts" / "quarterly_retrain.py"),
+        str(MARKET_DIR / "scripts" / "quarterly_retrain.py"),
         "--emergency",
         "--reason",
         reason,

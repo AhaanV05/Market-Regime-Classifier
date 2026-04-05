@@ -21,12 +21,13 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-LOGS_DIR = PROJECT_ROOT / 'logs'
-MODELS_DIR = PROJECT_ROOT / 'models'
-OUTPUT_DIR = PROJECT_ROOT / 'output'
-FEATURES_DIR = PROJECT_ROOT / 'features'
-DATA_DIR = PROJECT_ROOT / 'data' / 'processed'
+MARKET_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = MARKET_DIR.parent
+LOGS_DIR = PROJECT_ROOT / 'logs' / 'market_regime'
+MODELS_DIR = MARKET_DIR / 'models'
+OUTPUT_DIR = PROJECT_ROOT / 'output' / 'market_regime'
+FEATURES_DIR = MARKET_DIR / 'features'
+DATA_DIR = MARKET_DIR / 'data' / 'processed'
 
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -153,11 +154,11 @@ def run_data_refresh(run_date, years=15):
     ]
     build_cmd = [
         py,
-        str(PROJECT_ROOT / 'scripts' / 'build_features.py'),
+        str(MARKET_DIR / 'scripts' / 'build_features.py'),
         '--data-path',
         str(market_path),
         '--output-dir',
-        str(PROJECT_ROOT / 'features'),
+        str(FEATURES_DIR),
         '--append-only',
     ]
 
@@ -206,12 +207,12 @@ def run_data_refresh(run_date, years=15):
 
     market_max_after = _safe_max_date(market_path)
     fetch_details['market_max_after'] = market_max_after.strftime('%Y-%m-%d') if market_max_after is not None else None
-    final_max_before = _safe_max_date(PROJECT_ROOT / 'features' / 'final_features_matrix.csv')
-    slow_max_before = _safe_max_date(PROJECT_ROOT / 'features' / 'slow_features_matrix.csv')
-    fast_max_before = _safe_max_date(PROJECT_ROOT / 'features' / 'fast_features_matrix.csv')
+    final_max_before = _safe_max_date(FEATURES_DIR / 'final_features_matrix.csv')
+    slow_max_before = _safe_max_date(FEATURES_DIR / 'slow_features_matrix.csv')
+    fast_max_before = _safe_max_date(FEATURES_DIR / 'fast_features_matrix.csv')
 
     feature_files_missing = any(
-        not (PROJECT_ROOT / 'features' / f).exists()
+        not (FEATURES_DIR / f).exists()
         for f in ['final_features_matrix.csv', 'slow_features_matrix.csv', 'fast_features_matrix.csv']
     )
     feature_max_before = min(
@@ -245,9 +246,9 @@ def run_data_refresh(run_date, years=15):
             'build_stderr_tail': build_proc.stderr[-3000:],
         }
 
-    final_max_after = _safe_max_date(PROJECT_ROOT / 'features' / 'final_features_matrix.csv')
-    slow_max_after = _safe_max_date(PROJECT_ROOT / 'features' / 'slow_features_matrix.csv')
-    fast_max_after = _safe_max_date(PROJECT_ROOT / 'features' / 'fast_features_matrix.csv')
+    final_max_after = _safe_max_date(FEATURES_DIR / 'final_features_matrix.csv')
+    slow_max_after = _safe_max_date(FEATURES_DIR / 'slow_features_matrix.csv')
+    fast_max_after = _safe_max_date(FEATURES_DIR / 'fast_features_matrix.csv')
     feature_max_after = min(
         [d for d in [final_max_after, slow_max_after, fast_max_after] if d is not None],
         default=None,
@@ -451,7 +452,7 @@ def main():
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
-        from scripts.daily_inference_runtime import DailyInferencePipeline
+        from daily_inference_runtime import DailyInferencePipeline
     except Exception as exc:
         payload = {
             'timestamp': datetime.now().isoformat(),
@@ -467,12 +468,27 @@ def main():
     config = {
         'ema_alpha_slow': 0.05,     # NB02: implicit (no EMA in batch, but 0.05 for daily smoothing)
         'ema_alpha_fast': 0.10,     # NB02: implicit fast smoothing
+        'prob_floor_eps': 0.02,
+        'prob_ceiling': 0.98,
         'hysteresis_enter': 0.60,   # NB02: enter_threshold=0.60
         'hysteresis_exit': 0.40,    # NB02: exit_threshold=0.40
+        'macro_threshold_recalibration_enabled': True,
+        'macro_threshold_recalibration_lookback_days': 756,
+        'macro_threshold_recalibration_high_quantile': 0.70,
+        'macro_threshold_recalibration_low_quantile': 0.30,
+        'macro_threshold_enter_min': 0.55,
+        'macro_threshold_enter_max': 0.80,
+        'macro_threshold_exit_min': 0.20,
+        'macro_threshold_exit_max': 0.45,
+        'macro_threshold_min_gap': 0.12,
         'hysteresis_stress_enter': 0.65,  # NB02: p_stress > 0.65 to enter Stress
         'hysteresis_stress_exit': 0.35,   # NB02: p_stress < 0.35 to exit Stress
         'hysteresis_choppy_enter': 0.55,  # NB02: p_choppy > 0.55 to enter Choppy
         'hysteresis_choppy_exit': 0.35,   # NB02: p_choppy < 0.35 to exit Choppy
+        'adaptive_saturation_high': 0.98,
+        'adaptive_saturation_low': 0.02,
+        'adaptive_saturation_max_days': 40,
+        'adaptive_saturation_recenter_strength': 0.25,
         'min_days_durable': 15,     # NB02: MIN_DURATIONS_MACRO['Durable'] = 15
         'min_days_fragile': 10,     # NB02: MIN_DURATIONS_MACRO['Fragile'] = 10
         'min_days_calm': 2,         # NB02: MIN_DURATIONS_FAST['Calm'] = 2
@@ -485,6 +501,9 @@ def main():
         'state_history_window': 30,
         'attribution_stats_window': 756,
         'lock_stale_seconds': 6 * 3600,
+        'yearly_occupancy_alarm_enabled': True,
+        'yearly_occupancy_limit': 0.90,
+        'yearly_occupancy_min_samples': 40,
         'timeline_file': FEATURES_DIR / 'regime_timeline_history.csv',
         'timeline_rows_dir': OUTPUT_DIR / 'timeline_rows',
         'state_store_file': OUTPUT_DIR / 'daily_inference_state.json',

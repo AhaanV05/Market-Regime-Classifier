@@ -1,9 +1,9 @@
 """
-Retroactively compute adaptive-α EMA columns for the regime timeline CSV.
+Retroactively compute adaptive-alpha EMA columns for the regime timeline CSV.
 
 This script reads the existing regime_timeline_history.csv (which already has
-raw HMM probabilities and fixed-α smoothed probabilities), and computes the
-adaptive-α EMA + hysteresis + min-duration columns forward through the full
+raw HMM probabilities and fixed-alpha smoothed probabilities), and computes the
+adaptive-alpha EMA + hysteresis + min-duration columns forward through the full
 history. This is much faster than re-running the entire HMM inference pipeline.
 
 Usage:
@@ -12,12 +12,13 @@ Usage:
 
 import pandas as pd
 import numpy as np
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TIMELINE_FILE = ROOT / "features" / "regime_timeline_history.csv"
 
-# ── Adaptive-α parameters ──
+# ── Adaptive-alpha parameters ──
 ALPHA_SLOW_BASE = 0.05
 ALPHA_FAST_BASE = 0.10
 ALPHA_MAX_SLOW = 0.25
@@ -41,6 +42,13 @@ STRESS_OVERRIDE_IMMEDIATE = True
 
 
 def run_adaptive_alpha():
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     print(f"Reading {TIMELINE_FILE} ...")
     df = pd.read_csv(TIMELINE_FILE, parse_dates=["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
@@ -83,7 +91,7 @@ def run_adaptive_alpha():
         p_choppy_raw = float(row.get("p_choppy_raw", 1 / 3))
         p_stress_raw = float(row.get("p_stress_raw", 1 / 3))
 
-        # ── Adaptive-α EMA update ──
+        # ── Adaptive-alpha EMA update ──
         # Macro (slow)
         div_frag = abs(p_frag_raw - ema_a['p_fragile'])
         a_slow = ALPHA_SLOW_BASE + (ALPHA_MAX_SLOW - ALPHA_SLOW_BASE) * div_frag ** GAMMA
@@ -143,10 +151,10 @@ def run_adaptive_alpha():
     df['adaptive_combined_state'] = out_combined
 
     df.to_csv(TIMELINE_FILE, index=False)
-    print(f"  Wrote {n} rows with adaptive-α columns to {TIMELINE_FILE}")
+    print(f"  Wrote {n} rows with adaptive-alpha columns to {TIMELINE_FILE}")
 
     # ── Summary stats ──
-    print("\n── Adaptive-α Summary ──")
+    print("\n-- Adaptive-alpha Summary --")
     for col in ['adaptive_macro_state', 'adaptive_fast_state', 'adaptive_combined_state']:
         print(f"\n  {col} distribution:")
         for val, cnt in df[col].value_counts().items():
@@ -155,8 +163,8 @@ def run_adaptive_alpha():
     # Compare regime-change count: fixed vs adaptive
     fixed_changes = (df['combined_state'] != df['combined_state'].shift()).sum() - 1
     adaptive_changes = (df['adaptive_combined_state'] != df['adaptive_combined_state'].shift()).sum() - 1
-    print(f"\n  Regime changes (fixed-α):    {fixed_changes}")
-    print(f"  Regime changes (adaptive-α): {adaptive_changes}")
+    print(f"\n  Regime changes (fixed-alpha):    {fixed_changes}")
+    print(f"  Regime changes (adaptive-alpha): {adaptive_changes}")
     print(f"  Ratio: {adaptive_changes / max(fixed_changes, 1):.2f}x")
 
 

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Missing Data Handler for Market Time Series
 Forward-fill missing values with safety limits
 """
@@ -128,10 +128,10 @@ def handle_missing_data(
     missing_stats = analyze_missing_data(df)
     
     if not missing_stats:
-        print("âœ“ No missing data found!")
+        print("✓ No missing data found!")
         if output_path:
             df.to_csv(output_path, index=False)
-            print(f"âœ“ Saved to {output_path}")
+            print(f"✓ Saved to {output_path}")
         return df
     
     print(f"Found missing data in {len(missing_stats)} columns:")
@@ -143,7 +143,7 @@ def handle_missing_data(
     for col, stats in missing_stats.items():
         if stats['percentage'] > drop_threshold * 100:
             drop_cols.append(col)
-            print(f"âš  {col} has {stats['percentage']}% missing (above {drop_threshold*100}% threshold)")
+            print(f"⚠ {col} has {stats['percentage']}% missing (above {drop_threshold*100}% threshold)")
     
     if drop_cols:
         print(f"\nDropping columns: {drop_cols}")
@@ -157,7 +157,7 @@ def handle_missing_data(
     remaining_stats = analyze_missing_data(df)
     
     if remaining_stats:
-        print(f"\nâš  {len(remaining_stats)} columns still have missing data after ffill:")
+        print(f"\n⚠ {len(remaining_stats)} columns still have missing data after ffill:")
         for col, stats in remaining_stats.items():
             print(f"  {col}: {stats['count']} missing ({stats['percentage']}%)")
             
@@ -165,7 +165,7 @@ def handle_missing_data(
             runs = find_consecutive_missing(df[col])
             if len(runs) > 0:
                 max_run = runs['length'].max()
-                print(f"    â†’ Longest consecutive run: {max_run} days")
+                print(f"    → Longest consecutive run: {max_run} days")
         
         # Drop rows with any remaining missing values
         rows_before = len(df)
@@ -174,16 +174,16 @@ def handle_missing_data(
         rows_dropped = rows_before - rows_after
         
         if rows_dropped > 0:
-            print(f"\nâœ“ Dropped {rows_dropped} rows with remaining missing values")
+            print(f"\n✓ Dropped {rows_dropped} rows with remaining missing values")
     else:
-        print("\nâœ“ All missing values filled successfully!")
+        print("\n✓ All missing values filled successfully!")
     
     print("="*60)
     print(f"Final dataset: {len(df)} rows, {len(df.columns)} columns")
     
     if output_path:
         df.to_csv(output_path, index=False)
-        print(f"âœ“ Saved cleaned data to {output_path}")
+        print(f"✓ Saved cleaned data to {output_path}")
     
     return df
 

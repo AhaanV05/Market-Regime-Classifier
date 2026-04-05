@@ -255,18 +255,27 @@ Check output:
 cat output/regime_state_latest.json
 ```
 
-### Issue: Automation not triggering
+### Issue: "Models not found"
 
-**Check scheduler setup:**
-- Windows: Task Scheduler has active triggers
-- Linux/Mac: `crontab -l` shows entries
-- GitHub Actions: Runner service is running (`.\svc.sh status`)
+**You need to run Week 1-5 notebooks first!**
 
-**Test manually first:**
-```bash
-python scripts/daily_automation.py --build-features
-```
+The production system needs these files from Week 5:
+- `models/hmm_regime_models.joblib`
+- `features/slow_features_matrix.csv`
+- `features/fast_features_matrix.csv`
+- `data/processed/market_data_historical.csv`
 
+If missing, go back and run notebooks 01-05 first.
+
+---NOTEBOOKS_VS_PRODUCTION.md](NOTEBOOKS_VS_PRODUCTION.md)** ⭐ **READ THIS** - How notebooks fit with production
+- **[
+
+## 📚 Documentation
+
+- **[WHAT_CHANGED.md](WHAT_CHANGED.md)** - Detailed comparison with Notebook 06
+- **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Complete setup guide
+**Run Notebook 01 (ONE-TIME)** ← MUST DO FIRST!
+- [ ] 
 ---
 
 ## ✅ Checklist
